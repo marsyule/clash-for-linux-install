@@ -134,7 +134,7 @@ Commands:
   use <id>        使用订阅
   update [id]     更新订阅
   log             订阅日志
-
+  ext             订阅扩展
 
 Options:
   update:
@@ -145,6 +145,35 @@ Options:
 - 支持添加本地订阅，例如：`file:///root/clashctl/resources/config.yaml`
 - 当订阅链接解析失败或包含特殊字符时，请使用引号包裹以避免被错误解析。
 - 自动更新任务可通过 `crontab -e` 进行修改和管理。
+
+
+### 订阅 JavaScript 扩展
+
+```bash
+$ clashsub ext ls
+$ clashsub ext enable 1
+$ clashsub ext edit 1
+$ clashsub ext run 1
+$ clashsub ext log 1
+```
+
+- 每个订阅都有独立的扩展脚本，默认路径为 `resources/extensions/<id>/transform.js`，默认关闭。
+- 仅在显式执行 `clashsub ext enable <id>` 后，切换订阅（`clashsub use`）与更新订阅（`clashsub update`）时才会执行扩展。
+- 扩展执行顺序为：原始订阅 -> JS transform -> Mixin 深度合并 -> 运行时配置。
+- 当脚本语法、导出函数或返回值不合法时会直接报错并中断，且不会覆盖当前可用的 `runtime.yaml`。
+- 扩展执行日志会写入 `resources/logs/extension/<id>.log`。
+
+扩展脚本模板：
+
+```js
+function main(config, context) {
+  return config;
+}
+
+module.exports = { main };
+```
+
+其中 `context` 包含 `subscriptionId`、`subscriptionName`、`subscriptionUrl`、`isConvertEnabled` 字段。
 
 ### `Tun` 模式
 

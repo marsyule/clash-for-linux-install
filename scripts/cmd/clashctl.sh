@@ -67,6 +67,205 @@ _detect_proxy_port() {
     ((count)) && _merge_config
 }
 
+
+_ensure_ext_script() {
+    local id=$1
+    local ext_dir="${CLASH_EXTENSION_DIR}/${id}"
+    local ext_script="${ext_dir}/transform.js"
+    mkdir -p "$ext_dir"
+    [ -f "$ext_script" ] && {
+        echo "$ext_script"
+        return 0
+    }
+    cat >"$ext_script" <<'EOF'
+function main(config, context) {
+  return config;
+}
+
+module.exports = { main };
+EOF
+    echo "$ext_script"
+}
+
+_get_ext_enabled_by_id() {
+    "$BIN_YQ" -e ".profiles[] | select(.id == \"$1\") | .extension_enabled // false" "$CLASH_PROFILES_META" 2>/dev/null
+}
+
+_get_name_by_id() {
+    "$BIN_YQ" -e ".profiles[] | select(.id == \"$1\") | .name // \"\"" "$CLASH_PROFILES_META" 2>/dev/null
+}
+
+_get_ext_script_by_id() {
+    "$BIN_YQ" -e ".profiles[] | select(.id == \"$1\") | .extension_script // \"\"" "$CLASH_PROFILES_META" 2>/dev/null
+}
+
+_logging_ext() {
+    local id=$1
+    local msg=$2
+    mkdir -p "$CLASH_EXTENSION_LOG_DIR"
+    echo "$(date +"%Y-%m-%d %H:%M:%S") $msg" >>"${CLASH_EXTENSION_LOG_DIR}/${id}.log"
+}
+
+_run_subscription_pipeline() {
+    local id=$1
+    local profile_path url
+    profile_path=$(_get_path_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
+    url=$(_get_url_by_id "$id")
+
+    cat "$profile_path" >"$CLASH_CONFIG_BASE"
+
+    local ext_enabled ext_script sub_name
+    ext_enabled=$(_get_ext_enabled_by_id "$id") || ext_enabled=false
+    ext_script=$(_get_ext_script_by_id "$id") || ext_script=""
+    sub_name=$(_get_name_by_id "$id") || sub_name=""
+    [ -z "$sub_name" ] && sub_name="sub-$id"
+
+    if [ "$ext_enabled" = true ]; then
+        [ -z "$ext_script" ] && ext_script=$(_ensure_ext_script "$id")
+        _run_extension_transform "$id" "$profile_path" "$url" "$sub_name" "$ext_script"
+    fi
+
+    _merge_config_restart
+}
+
+_run_extension_transform() {
+    local id=$1
+    local profile_path=$2
+    local url=$3
+    local sub_name=$4
+    local ext_script=$5
+
+    local ext_tmp_js="${CLASH_CONFIG_TEMP}.extension.js"
+    local ext_tmp_json="${CLASH_CONFIG_TEMP}.extension.input.json"
+    local ext_out_json="${CLASH_CONFIG_TEMP}.extension.output.json"
+    local ext_tmp_yaml="${CLASH_CONFIG_TEMP}.extension.yaml"
+    local error_prefix="[extension] subscription=${id} name=${sub_name}"
+
+    [ -f "$ext_script" ] || {
+        _logging_ext "$id" "❌ ScriptNotFound: $ext_script"
+        _failcat "$error_prefix"
+        _failcat "[extension] script=${ext_script}"
+        _error_quit "[extension] error=ScriptNotFound"
+    }
+
+    "$BIN_YQ" -o=json '.' "$profile_path" >"$ext_tmp_json" 2>/dev/null || {
+        _logging_ext "$id" "❌ YamlToJsonError"
+        _failcat "$error_prefix"
+        _failcat "[extension] script=${ext_script}"
+        _error_quit "[extension] error=YamlToJsonError"
+    }
+
+    cat >"$ext_tmp_js" <<'EOF'
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const inputPath = process.argv[2];
+const scriptPath = process.argv[3];
+const outputPath = process.argv[4];
+const contextRaw = process.argv[5];
+
+function fail(type, err) {
+  const msg = err && err.message ? err.message : String(err || type);
+  process.stderr.write(`${type}: ${msg}`);
+  process.exit(1);
+}
+
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
+} catch (err) {
+  fail('JsonParseError', err);
+}
+
+const mod = { exports: {} };
+let scriptBody;
+try {
+  scriptBody = fs.readFileSync(scriptPath, 'utf8');
+} catch (err) {
+  fail('ReadScriptError', err);
+}
+
+try {
+  const localRequire = (name) => {
+    if (name.startsWith('.')) {
+      return require(path.resolve(path.dirname(scriptPath), name));
+    }
+    return require(name);
+  };
+  const wrapped = `(function (module, exports, require) {
+${scriptBody}
+})`;
+  const fn = vm.runInNewContext(wrapped, {}, { filename: scriptPath, timeout: 3000 });
+  fn(mod, mod.exports, localRequire);
+} catch (err) {
+  fail('ScriptCompileError', err);
+}
+
+const mainFn = mod.exports && mod.exports.main;
+if (typeof mainFn !== 'function') {
+  fail('MainNotFoundError', 'module.exports.main is not defined');
+}
+
+let context = {};
+try {
+  context = JSON.parse(contextRaw);
+} catch (err) {
+  fail('ContextParseError', err);
+}
+
+let transformed;
+try {
+  transformed = mainFn(config, context);
+} catch (err) {
+  fail('ScriptRuntimeError', err);
+}
+
+if (!transformed || typeof transformed !== 'object' || Array.isArray(transformed)) {
+  fail('InvalidReturnError', 'main must return an object');
+}
+
+try {
+  fs.writeFileSync(outputPath, JSON.stringify(transformed), 'utf8');
+} catch (err) {
+  fail('WriteConfigError', err);
+}
+EOF
+
+    local context_json
+    context_json=$(printf '{"subscriptionId":"%s","subscriptionName":"%s","subscriptionUrl":"%s","isConvertEnabled":false}' "$id" "$sub_name" "$url")
+
+    local ext_err
+    ext_err=$(timeout 5s node "$ext_tmp_js" "$ext_tmp_json" "$ext_script" "$ext_out_json" "$context_json" 2>&1)
+    local ext_code=$?
+
+    if [ $ext_code -ne 0 ]; then
+        [ $ext_code -eq 124 ] && ext_err="ScriptTimeoutError: exceeded 5s"
+        _logging_ext "$id" "❌ ${ext_err}"
+        _failcat "$error_prefix"
+        _failcat "[extension] script=${ext_script}"
+        _error_quit "[extension] error=${ext_err}"
+    fi
+
+    "$BIN_YQ" -P '.' "$ext_out_json" >"$ext_tmp_yaml" 2>/dev/null || {
+        _logging_ext "$id" "❌ JsonToYamlError"
+        _failcat "$error_prefix"
+        _failcat "[extension] script=${ext_script}"
+        _error_quit "[extension] error=JsonToYamlError"
+    }
+
+    _valid_config "$ext_tmp_yaml" || {
+        _logging_ext "$id" "❌ InvalidConfigAfterTransform"
+        _failcat "$error_prefix"
+        _failcat "[extension] script=${ext_script}"
+        _error_quit "[extension] error=InvalidConfigAfterTransform"
+    }
+
+    cat "$ext_tmp_yaml" >"$CLASH_CONFIG_BASE"
+    _logging_ext "$id" "✅ success script=${ext_script}"
+}
+
+
 function clashon() {
     _detect_proxy_port
     clashstatus >&/dev/null || placeholder_start
@@ -508,6 +707,10 @@ function clashsub() {
         shift
         _sub_log "$@"
         ;;
+    ext)
+        shift
+        _sub_ext "$@"
+        ;;
     -h | --help | *)
         cat <<EOF
 clashsub - Clash 订阅管理工具
@@ -522,6 +725,7 @@ Commands:
   use <id>        使用订阅
   update [id]     更新订阅
   log             订阅日志
+  ext             订阅扩展
 
 Options:
   update:
@@ -550,12 +754,18 @@ _sub_add() {
     local profile_path="${CLASH_PROFILES_DIR}/${id}.yaml"
     mv "$CLASH_CONFIG_TEMP" "$profile_path"
 
+    local ext_script
+    ext_script=$(_ensure_ext_script "$id")
+
     "$BIN_YQ" -i "
          .profiles = (.profiles // []) + 
          [{
            \"id\": $id,
+           \"name\": \"sub-$id\",
            \"path\": \"$profile_path\",
-           \"url\": \"$url\"
+           \"url\": \"$url\",
+           \"extension_enabled\": false,
+           \"extension_script\": \"$ext_script\"
          }]
     " "$CLASH_PROFILES_META"
     _logging_sub "➕ 已添加订阅：[$id] $url"
@@ -574,6 +784,8 @@ _sub_del() {
     use=$("$BIN_YQ" '.use // ""' "$CLASH_PROFILES_META")
     [ "$use" = "$id" ] && _error_quit "删除失败：订阅 $id 正在使用中，请先切换订阅"
     /usr/bin/rm -f "$profile_path"
+    /usr/bin/rm -rf "${CLASH_EXTENSION_DIR}/${id}"
+    /usr/bin/rm -f "${CLASH_EXTENSION_LOG_DIR}/${id}.log"
     "$BIN_YQ" -i "del(.profiles[] | select(.id == \"$id\"))" "$CLASH_PROFILES_META"
     _logging_sub "➖ 已删除订阅：[$id] $url"
     _okcat '🎉' "订阅已删除：[$id] $url"
@@ -594,8 +806,7 @@ _sub_use() {
     local profile_path url
     profile_path=$(_get_path_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
     url=$(_get_url_by_id "$id")
-    cat "$profile_path" >"$CLASH_CONFIG_BASE"
-    _merge_config_restart
+    _run_subscription_pipeline "$id"
     "$BIN_YQ" -i ".use = $id" "$CLASH_PROFILES_META"
     _logging_sub "🔥 订阅已切换为：[$id] $url"
     _okcat '🔥' '订阅已生效'
@@ -607,7 +818,7 @@ _get_url_by_id() {
     "$BIN_YQ" -e ".profiles[] | select(.id == \"$1\") | .url" "$CLASH_PROFILES_META" 2>/dev/null
 }
 _sub_update() {
-    local arg is_convert
+    local arg is_convert=false
     for arg in "$@"; do
         case $arg in
         --auto)
@@ -650,7 +861,7 @@ _sub_update() {
     _logging_sub "✅ 订阅更新成功：[$id] $url"
     cat "$CLASH_CONFIG_TEMP" >"$profile_path"
     use=$("$BIN_YQ" '.use // ""' "$CLASH_PROFILES_META")
-    [ "$use" = "$id" ] && clashsub use "$use" && return
+    [ "$use" = "$id" ] && _run_subscription_pipeline "$use" && return
     _okcat '订阅已更新'
 }
 _logging_sub() {
@@ -658,6 +869,114 @@ _logging_sub() {
 }
 _sub_log() {
     tail <"${CLASH_PROFILES_LOG}" "$@"
+}
+
+_sub_ext() {
+    case "$1" in
+    ls | list | "")
+        _sub_ext_ls
+        ;;
+    enable)
+        _sub_ext_enable "$2"
+        ;;
+    disable)
+        _sub_ext_disable "$2"
+        ;;
+    status)
+        _sub_ext_status "$2"
+        ;;
+    edit)
+        _sub_ext_edit "$2"
+        ;;
+    run)
+        _sub_ext_run "$2"
+        ;;
+    log)
+        _sub_ext_log "$2"
+        ;;
+    *)
+        cat <<EOF
+Usage:
+  clashsub ext ls
+  clashsub ext enable <id>
+  clashsub ext disable <id>
+  clashsub ext status [id]
+  clashsub ext edit <id>
+  clashsub ext run <id>
+  clashsub ext log [id]
+EOF
+        ;;
+    esac
+}
+
+_sub_ext_ls() {
+    "$BIN_YQ" '.profiles // [] | map({id, name, extension_enabled, extension_script})' "$CLASH_PROFILES_META"
+}
+
+_sub_ext_enable() {
+    local id=$1
+    [ -z "$id" ] && _error_quit "订阅 id 不能为空"
+    _get_path_by_id "$id" >/dev/null || _error_quit "订阅 id 不存在，请检查"
+    local ext_script
+    ext_script=$(_get_ext_script_by_id "$id") || ext_script=""
+    [ -z "$ext_script" ] && ext_script=$(_ensure_ext_script "$id")
+    "$BIN_YQ" -i "(.profiles[] | select(.id == \"$id\") | .extension_script) = \"$ext_script\"" "$CLASH_PROFILES_META"
+    "$BIN_YQ" -i "(.profiles[] | select(.id == \"$id\") | .extension_enabled) = true" "$CLASH_PROFILES_META"
+    _okcat "订阅扩展已启用：[$id]"
+}
+
+_sub_ext_disable() {
+    local id=$1
+    [ -z "$id" ] && _error_quit "订阅 id 不能为空"
+    _get_path_by_id "$id" >/dev/null || _error_quit "订阅 id 不存在，请检查"
+    "$BIN_YQ" -i "(.profiles[] | select(.id == \"$id\") | .extension_enabled) = false" "$CLASH_PROFILES_META"
+    _okcat "订阅扩展已禁用：[$id]"
+}
+
+_sub_ext_status() {
+    local id=$1
+    if [ -z "$id" ]; then
+        _sub_ext_ls
+        return 0
+    fi
+    "$BIN_YQ" -e ".profiles[] | select(.id == \"$id\") | {id, name, extension_enabled, extension_script}" "$CLASH_PROFILES_META" 2>/dev/null || _error_quit "订阅 id 不存在，请检查"
+}
+
+_sub_ext_edit() {
+    local id=$1
+    [ -z "$id" ] && _error_quit "订阅 id 不能为空"
+    _get_path_by_id "$id" >/dev/null || _error_quit "订阅 id 不存在，请检查"
+    local ext_script
+    ext_script=$(_get_ext_script_by_id "$id") || ext_script=""
+    [ -z "$ext_script" ] && ext_script=$(_ensure_ext_script "$id")
+    "$BIN_YQ" -i "(.profiles[] | select(.id == \"$id\") | .extension_script) = \"$ext_script\"" "$CLASH_PROFILES_META"
+    vim "$ext_script"
+}
+
+_sub_ext_run() {
+    local id=$1
+    [ -z "$id" ] && _error_quit "订阅 id 不能为空"
+    local profile_path url ext_script sub_name
+    profile_path=$(_get_path_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
+    url=$(_get_url_by_id "$id")
+    sub_name=$(_get_name_by_id "$id") || sub_name="sub-$id"
+    ext_script=$(_get_ext_script_by_id "$id") || ext_script=""
+    [ -z "$ext_script" ] && ext_script=$(_ensure_ext_script "$id")
+
+    local backup="${CLASH_CONFIG_BASE}.bak"
+    [ -f "$CLASH_CONFIG_BASE" ] && cat "$CLASH_CONFIG_BASE" >"$backup"
+    _run_extension_transform "$id" "$profile_path" "$url" "$sub_name" "$ext_script"
+    [ -f "$backup" ] && cat "$backup" >"$CLASH_CONFIG_BASE"
+    _okcat "订阅扩展执行成功：[$id]"
+}
+
+_sub_ext_log() {
+    local id=$1
+    if [ -n "$id" ]; then
+        tail -n 50 "${CLASH_EXTENSION_LOG_DIR}/${id}.log"
+        return 0
+    fi
+    ls -1 "$CLASH_EXTENSION_LOG_DIR" 2>/dev/null
 }
 
 function clashctl() {
