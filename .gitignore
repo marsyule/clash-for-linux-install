@@ -7,5 +7,8 @@ resources/dist/
 test.sh
 
 
-
 !.gitkeep
+
+bin/
+debug/
+node_modules/

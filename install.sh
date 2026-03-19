@@ -12,7 +12,21 @@ _detect_init
 _okcat "安装内核：$KERNEL_NAME by ${INIT_TYPE}"
 _okcat '📦' "安装路径：$CLASH_BASE_DIR"
 
-/bin/cp -rf . "$CLASH_BASE_DIR"
+/bin/cp -rf ./*  "$CLASH_BASE_DIR"
+
+if command -v node >/dev/null 2>&1; then
+    _okcat '📦' "安装Node.js依赖..."
+    cd "$CLASH_BASE_DIR"
+    if npm install --production 2>&1; then
+        _okcat '✅' "Node.js依赖安装成功"
+    else
+        _failcat "npm install失败，JS脚本功能可能不可用"
+    fi
+    cd - >/dev/null
+else
+    _failcat "未检测到Node.js，JS脚本功能不可用"
+fi
+
 touch "$CLASH_CONFIG_BASE"
 _set_envs
 _is_regular_sudo && chown -R "$SUDO_USER" "$CLASH_BASE_DIR"

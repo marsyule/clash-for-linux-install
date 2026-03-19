@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  clashctl-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: clashctl-test
+    volumes:
+      - .:/app
+    ports:
+      - "20001:7890"
+      - "20002:7891"
+      - "20003:9090"
+    stdin_open: true
+    tty: true
+    labels:
+      - "description=Interactive test environment for clashctl"
+    
+# Usage:
+#   docker-compose run --rm clashctl-test
+#   This will automatically remove the container after exit (like docker run -it --rm)

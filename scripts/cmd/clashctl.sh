@@ -2,6 +2,7 @@
 
 THIS_SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE:-${(%):-%N}}")")
 . "$THIS_SCRIPT_DIR/common.sh"
+. "$THIS_SCRIPT_DIR/script.sh"
 
 _set_system_proxy() {
     local mixed_port=$("$BIN_YQ" '.mixed-port // ""' "$CLASH_CONFIG_RUNTIME")
@@ -187,6 +188,9 @@ function clashui() {
 }
 
 _merge_config() {
+    local profile_id=$1
+    [ -z "$profile_id" ] && profile_id=$("$BIN_YQ" '.use // 1' "$CLASH_PROFILES_META" 2>/dev/null)
+    
     cat "$CLASH_CONFIG_RUNTIME" >"$CLASH_CONFIG_TEMP" 2>/dev/null
     # shellcheck disable=SC2016
     "$BIN_YQ" eval-all '
@@ -252,10 +256,19 @@ _merge_config() {
         cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
         _error_quit "验证失败：请检查 Mixin 配置"
     }
+
+    # 执行JS脚本处理
+    execute_scripts "$CLASH_CONFIG_RUNTIME" "$profile_id"
+    
+    _valid_config "$CLASH_CONFIG_RUNTIME" || {
+        cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
+        _error_quit "验证失败：请检查 js 脚本"
+    }
 }
 
 _merge_config_restart() {
-    _merge_config
+    local profile_id=$1
+    _merge_config "$profile_id"
     placeholder_stop >/dev/null
     clashstatus >&/dev/null && _tunstatus >&/dev/null && {
         _tunoff || _error_quit "请先关闭 Tun 模式"
@@ -595,7 +608,7 @@ _sub_use() {
     profile_path=$(_get_path_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
     url=$(_get_url_by_id "$id")
     cat "$profile_path" >"$CLASH_CONFIG_BASE"
-    _merge_config_restart
+    _merge_config_restart "$id"
     "$BIN_YQ" -i ".use = $id" "$CLASH_PROFILES_META"
     _logging_sub "🔥 订阅已切换为：[$id] $url"
     _okcat '🔥' '订阅已生效'
