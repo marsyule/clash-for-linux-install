@@ -30,18 +30,7 @@ function clashscript() {
         _script_disable "$@"
         ;;
     *)
-        cat <<EOF
-clashscript - Clash 脚本管理工具
-
-说明: 每个脚本对应一个订阅，脚本ID与订阅ID一一对应
-
-Commands:
-  add [id] <path>   添加脚本（可选指定ID，默认自动分配最小可用ID）
-  ls                查看脚本列表
-  del <id>          删除脚本
-  enable <id>       启用脚本
-  disable <id>      禁用脚本
-EOF
+        _script_list
         ;;
     esac
 }
@@ -144,9 +133,9 @@ _script_list() {
     [ -z "$data" ] && { _failcat "No scripts found."; return 1; }
 
     echo "$data" | while IFS=$'\t' read -r id name enabled; do
-        local status="[DISABLED]"
-        [ "$enabled" = "true" ] && status="[ENABLED]"
-        printf "[%d] %-20s %s\n" "$id" "$name" "$status"
+        local state="[DISABLED]"
+        [ "$enabled" = "true" ] && state="[ENABLED]"
+        printf "[%d] %-20s %s\n" "$id" "$name" "$state"
     done
 }
 
@@ -189,10 +178,25 @@ function execute_scripts() {
     script_path=$("$BIN_YQ" -r ".scripts[] | select(.id == $profile_id and .enabled == true) | .path" "$CLASH_SCRIPTS_META" 2>/dev/null)
     
     [ -z "$script_path" ] && return 0
-    [ ! -f "$script_path" ] && return 0
+    [ ! -f "$script_path" ] && {
+        _failcat "脚本文件不存在: $script_path"
+        return 1
+    }
     
     _okcat "⏳" "执行脚本: $(basename "$script_path")"
-    "$BIN_NODE" "$BIN_JS_EXECUTOR" "$config_file" "$script_path" "profile_$profile_id"
+    
+    local error_output
+    error_output=$("$BIN_NODE" "$BIN_JS_EXECUTOR" "$config_file" "$script_path" "profile_$profile_id" 2>&1)
+    local exit_code=$?
+    
+    if [ $exit_code -ne 0 ]; then
+        _failcat "脚本执行失败 (退出码: $exit_code)"
+        [ -n "$error_output" ] && {
+            echo "错误详情:" >&2
+            echo "$error_output" >&2
+        }
+        return 1
+    fi
 }
 
 function _init_script_system() {

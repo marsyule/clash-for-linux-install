@@ -1,8 +1,8 @@
 # Linux 一键安装 Clash (Develop Branch)
 
-![GitHub License](https://img.shields.io/github/license/nelvko/clash-for-linux-install)
-![GitHub top language](https://img.shields.io/github/languages/top/nelvko/clash-for-linux-install)
-![GitHub Repo stars](https://img.shields.io/github/stars/nelvko/clash-for-linux-install)
+![GitHub License](https://img.shields.io/github/license/marsyule/clash-for-linux-install)
+![GitHub top language](https://img.shields.io/github/languages/top/marsyule/clash-for-linux-install)
+![GitHub Repo stars](https://img.shields.io/github/stars/marsyule/clash-for-linux-install)
 ![GitHub branch](https://img.shields.io/github/branch-name/marsyule/clash-for-linux-install/develop)
 
 ![preview](resources/preview.png)
@@ -17,6 +17,8 @@
 - 自动检测端口占用情况，在冲突时随机分配可用端口。
 - 自动识别系统架构与初始化系统，下载匹配的内核与依赖，并生成对应的服务管理配置。
 - 在需要时调用 [subconverter](https://github.com/tindy2013/subconverter) 进行本地订阅转换。
+
+**新特性**
 - **🆕 支持JS脚本系统**：通过编程方式修改订阅配置，实现复杂的配置逻辑。
 - **🆕 三层配置架构**：订阅 → Mixin合并 → JS脚本处理 → 最终配置，高度解耦且易于扩展。
 - **🆕 一对一脚本映射**：脚本ID与订阅ID一一对应，管理更清晰。
@@ -35,7 +37,6 @@ git clone --branch develop --depth 1 https://gh-proxy.org/https://github.com/mar
 - **开发版本**：此为 `develop` 分支，包含最新的实验性功能。
 - **稳定版本**：如需稳定版本，请将命令中的 `develop` 改为 `master`。
 - 可通过 `.env` 文件或脚本参数自定义安装选项。
-- 没有订阅？[click me](https://次元.net/auth/register?code=oUbI)
 
 ## ⌨️ 命令一览
 
@@ -60,7 +61,6 @@ Global Options:
     -h, --help            显示帮助信息
 ```
 
-💡`clashon` 同 `clashctl on`，`Tab` 补全更方便！
 
 ### 优雅启停
 
@@ -132,7 +132,7 @@ $ clashupgrade
 ### 脚本管理
 
 ```bash
-$ clashscript -h
+$ clashctl script -h
 clashscript - Clash 脚本管理工具
 
 说明: 每个脚本对应一个订阅，脚本ID与订阅ID一一对应
@@ -144,6 +144,8 @@ Commands:
   enable <id>       启用脚本
   disable <id>      禁用脚本
 ```
+
+💡`clashscript` 同 `clashctl script`，`Tab` 补全更方便！
 
 #### 脚本功能说明
 
@@ -227,34 +229,34 @@ function main(config, profileName) {
 
 ```bash
 # 添加脚本（自动分配最小可用ID）
-$ clashscript add examples/scripts/modify-subscription.js
+$ clashctl script add examples/scripts/modify-subscription.js
 🎉 已添加: [1] modify-subscription.js (对应订阅 1)
 
 # 添加脚本（指定ID）
-$ clashscript add 3 examples/scripts/filter-nodes.js
+$ clashctl script add 3 examples/scripts/filter-nodes.js
 🎉 已添加: [3] filter-nodes.js (对应订阅 3)
 
 # 查看脚本列表（按ID排序）
-$ clashscript ls
+$ clashctl script ls
 [1] modify-subscription.js  [DISABLED]
 [2] auto-group.js           [ENABLED]
 [3] filter-nodes.js         [DISABLED]
 
 # 启用脚本（对应订阅1）
-$ clashscript enable 1
+$ clashctl script enable 1
 🎉 已启用脚本 [1] (对应订阅 1)
 
 # 禁用脚本
-$ clashscript disable 1
+$ clashctl script disable 1
 🎉 已禁用脚本 [1]
 
 # 删除脚本
-$ clashscript del 1
+$ clashctl script del 1
 🎉 已删除: [1]
 
 # ID自动填充示例
 # 假设当前有脚本ID: 1, 3, 5
-$ clashscript add test.js  # 自动分配ID=2（最小可用ID）
+$ clashctl script add test.js  # 自动分配ID=2（最小可用ID）
 🎉 已添加: [2] test.js (对应订阅 2)
 ```
 
@@ -262,19 +264,19 @@ $ clashscript add test.js  # 自动分配ID=2（最小可用ID）
 
 ```bash
 # 1. 添加订阅
-$ clashsub add https://example.com/subscribe
+$ clashctl sub add https://example.com/subscribe
 ✈️  订阅已添加: [1] https://example.com/subscribe
 
 # 2. 添加对应脚本
-$ clashscript add my-script.js
+$ clashctl script add my-script.js
 🎉 已添加: [1] my-script.js (对应订阅 1)
 
 # 3. 启用脚本
-$ clashscript enable 1
+$ clashctl script enable 1
 🎉 已启用脚本 [1] (对应订阅 1)
 
 # 4. 使用订阅（自动执行脚本）
-$ clashsub use 1
+$ clashctl sub use 1
 ⏳ 执行脚本: 1_my-script.js
 🔥 订阅已生效
 ```
@@ -308,7 +310,7 @@ function main(config, profileName) {
 ### 管理订阅
 
 ```bash
-$ clashsub -h
+$ clashctl sub -h
 Usage: 
   clashsub COMMAND [OPTIONS]
 
@@ -326,6 +328,8 @@ Options:
     --auto        配置自动更新
     --convert     使用订阅转换
 ```
+
+💡`clashsub` 同 `clashctl sub`，`Tab` 补全更方便！
 
 - 支持添加本地订阅，例如：`file:///root/clashctl/resources/config.yaml`
 - 当订阅链接解析失败或包含特殊字符时，请使用引号包裹以避免被错误解析。
@@ -363,22 +367,8 @@ bash uninstall.sh
 - [yq](https://github.com/mikefarah/yq)
 - [zashboard](https://github.com/Zephyruso/zashboard)
 
-## ⭐ Star History
-
-<a href="https://www.star-history.com/#nelvko/clash-for-linux-install&Date">
-
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=nelvko/clash-for-linux-install&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=nelvko/clash-for-linux-install&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=nelvko/clash-for-linux-install&type=Date" />
- </picture>
-</a>
-
-## 🙏 Thanks
-
-[@鑫哥](https://github.com/TrackRay)
-
 ## ⚠️ 特别声明
 
 1. 编写本项目主要目的为学习和研究 `Shell` 编程，不得将本项目中任何内容用于违反国家/地区/组织等的法律法规或相关规定的其他用途。
 2. 本项目保留随时对免责声明进行补充或更改的权利，直接或间接使用本项目内容的个人或组织，视为接受本项目的特别声明。
+3. 本项目fork于https://github.com/nelvko/clash-for-linux-install的master分支。

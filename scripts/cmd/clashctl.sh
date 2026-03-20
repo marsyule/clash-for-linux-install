@@ -191,7 +191,14 @@ _merge_config() {
     local profile_id=$1
     [ -z "$profile_id" ] && profile_id=$("$BIN_YQ" '.use // 1' "$CLASH_PROFILES_META" 2>/dev/null)
     
-    cat "$CLASH_CONFIG_RUNTIME" >"$CLASH_CONFIG_TEMP" 2>/dev/null
+    # 备份当前运行时配置
+    if [ -f "$CLASH_CONFIG_RUNTIME" ]; then
+        cat "$CLASH_CONFIG_RUNTIME" >"$CLASH_CONFIG_TEMP" 2>/dev/null || {
+            _failcat "无法备份配置文件"
+            return 1
+        }
+    fi
+    
     # shellcheck disable=SC2016
     "$BIN_YQ" eval-all '
       ########################################
@@ -253,16 +260,22 @@ _merge_config() {
       )
     ' "$CLASH_CONFIG_BASE" "$CLASH_CONFIG_MIXIN" >"$CLASH_CONFIG_RUNTIME"
     _valid_config "$CLASH_CONFIG_RUNTIME" || {
-        cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
-        _error_quit "验证失败：请检查 Mixin 配置"
+        local error_msg="验证失败：请检查 Mixin 配置"
+        [ -f "$CLASH_CONFIG_TEMP" ] && cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
+        _error_quit "$error_msg"
     }
 
     # 执行JS脚本处理
-    execute_scripts "$CLASH_CONFIG_RUNTIME" "$profile_id"
+    execute_scripts "$CLASH_CONFIG_RUNTIME" "$profile_id" || {
+        local error_msg="脚本执行失败"
+        [ -f "$CLASH_CONFIG_TEMP" ] && cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
+        _error_quit "$error_msg (订阅ID: $profile_id，请检查脚本语法和返回值)"
+    }
     
     _valid_config "$CLASH_CONFIG_RUNTIME" || {
-        cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
-        _error_quit "验证失败：请检查 js 脚本"
+        local error_msg="验证失败：JS脚本修改后的配置无效"
+        [ -f "$CLASH_CONFIG_TEMP" ] && cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
+        _error_quit "$error_msg (订阅ID: $profile_id，请检查脚本输出的配置格式)"
     }
 }
 
@@ -715,6 +728,10 @@ function clashctl() {
         shift
         clashsub "$@"
         ;;
+    script)
+        shift
+        clashscript "$@"
+        ;;
     upgrade)
         shift
         clashupgrade "$@"
@@ -739,6 +756,7 @@ Commands:
   status                内核状态
   ui                    面板地址
   sub                   订阅管理
+  script                脚本管理
   log                   内核日志
   tun                   Tun 模式
   mixin                 Mixin 配置
