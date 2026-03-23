@@ -2,6 +2,7 @@
 
 THIS_SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE:-${(%):-%N}}")")
 . "$THIS_SCRIPT_DIR/common.sh"
+. "$THIS_SCRIPT_DIR/script.sh"
 
 _set_system_proxy() {
     local mixed_port=$("$BIN_YQ" '.mixed-port // ""' "$CLASH_CONFIG_RUNTIME")
@@ -187,7 +188,17 @@ function clashui() {
 }
 
 _merge_config() {
-    cat "$CLASH_CONFIG_RUNTIME" >"$CLASH_CONFIG_TEMP" 2>/dev/null
+    local profile_id=$1
+    [ -z "$profile_id" ] && profile_id=$("$BIN_YQ" '.use // 1' "$CLASH_PROFILES_META" 2>/dev/null)
+    
+    # 备份当前运行时配置
+    if [ -f "$CLASH_CONFIG_RUNTIME" ]; then
+        cat "$CLASH_CONFIG_RUNTIME" >"$CLASH_CONFIG_TEMP" 2>/dev/null || {
+            _failcat "无法备份配置文件"
+            return 1
+        }
+    fi
+    
     # shellcheck disable=SC2016
     "$BIN_YQ" eval-all '
       ########################################
@@ -249,13 +260,28 @@ _merge_config() {
       )
     ' "$CLASH_CONFIG_BASE" "$CLASH_CONFIG_MIXIN" >"$CLASH_CONFIG_RUNTIME"
     _valid_config "$CLASH_CONFIG_RUNTIME" || {
-        cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
-        _error_quit "验证失败：请检查 Mixin 配置"
+        local error_msg="验证失败：请检查 Mixin 配置"
+        [ -f "$CLASH_CONFIG_TEMP" ] && cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
+        _error_quit "$error_msg"
+    }
+
+    # 执行JS脚本处理
+    execute_scripts "$CLASH_CONFIG_RUNTIME" "$profile_id" || {
+        local error_msg="脚本执行失败"
+        [ -f "$CLASH_CONFIG_TEMP" ] && cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
+        _error_quit "$error_msg (订阅ID: $profile_id，请检查脚本语法和返回值)"
+    }
+    
+    _valid_config "$CLASH_CONFIG_RUNTIME" || {
+        local error_msg="验证失败：JS脚本修改后的配置无效"
+        [ -f "$CLASH_CONFIG_TEMP" ] && cat "$CLASH_CONFIG_TEMP" >"$CLASH_CONFIG_RUNTIME"
+        _error_quit "$error_msg (订阅ID: $profile_id，请检查脚本输出的配置格式)"
     }
 }
 
 _merge_config_restart() {
-    _merge_config
+    local profile_id=$1
+    _merge_config "$profile_id"
     placeholder_stop >/dev/null
     clashstatus >&/dev/null && _tunstatus >&/dev/null && {
         _tunoff || _error_quit "请先关闭 Tun 模式"
@@ -595,7 +621,7 @@ _sub_use() {
     profile_path=$(_get_path_by_id "$id") || _error_quit "订阅 id 不存在，请检查"
     url=$(_get_url_by_id "$id")
     cat "$profile_path" >"$CLASH_CONFIG_BASE"
-    _merge_config_restart
+    _merge_config_restart "$id"
     "$BIN_YQ" -i ".use = $id" "$CLASH_PROFILES_META"
     _logging_sub "🔥 订阅已切换为：[$id] $url"
     _okcat '🔥' '订阅已生效'
@@ -702,6 +728,10 @@ function clashctl() {
         shift
         clashsub "$@"
         ;;
+    script)
+        shift
+        clashscript "$@"
+        ;;
     upgrade)
         shift
         clashupgrade "$@"
@@ -726,6 +756,7 @@ Commands:
   status                内核状态
   ui                    面板地址
   sub                   订阅管理
+  script                脚本管理
   log                   内核日志
   tun                   Tun 模式
   mixin                 Mixin 配置

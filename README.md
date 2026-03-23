@@ -14,7 +14,7 @@
 - 自动检测端口占用情况，在冲突时随机分配可用端口。
 - 自动识别系统架构与初始化系统，下载匹配的内核与依赖，并生成对应的服务管理配置。
 - 在需要时调用 [subconverter](https://github.com/tindy2013/subconverter) 进行本地订阅转换。
-- 新特性🔥：支持 JS 脚本控制订阅信息（该功能已在 develop 分支上线，master 分支即将同步）
+- 新特性🔥：支持 JS 脚本控制订阅信息（已发布）
 
 ## 🚀 一键安装
 
@@ -44,6 +44,7 @@ Commands:
     ui                    Web 面板
     secret                Web 密钥
     sub                   订阅管理
+    script                脚本管理
     upgrade               升级内核
     tun                   Tun 模式
     mixin                 Mixin 配置
@@ -146,6 +147,56 @@ Options:
 - 支持添加本地订阅，例如：`file:///root/clashctl/resources/config.yaml`
 - 当订阅链接解析失败或包含特殊字符时，请使用引号包裹以避免被错误解析。
 - 自动更新任务可通过 `crontab -e` 进行修改和管理。
+
+### 脚本管理
+
+```bash
+$ clashscript
+[1] auto-group.js        [ENABLED]
+```
+
+💡`clashscript` 同 `clashctl script`，`Tab` 补全更方便！
+
+**常用命令**：
+```bash
+# 添加脚本（自动分配 ID）
+clashscript add examples/scripts/auto-group.js
+
+# 指定 ID 添加
+clashscript add 1 examples/scripts/auto-group.js
+
+# 查看脚本列表
+clashscript ls
+
+# 启用/禁用脚本
+clashscript enable 1
+clashscript disable 1
+
+# 删除脚本
+clashscript del 1
+```
+
+**脚本系统架构**：
+```
+原始订阅 → Mixin 合并 → JS 脚本处理 → 最终配置
+```
+
+**注意事项**：
+- 每个脚本对应一个订阅（脚本 ID = 订阅 ID）
+- 脚本必须是 `.js` 文件，需导出 `main(config, profileName)` 函数
+- 脚本在订阅更新时自动执行
+
+**脚本格式**：
+```javascript
+function main(config, profileName) {
+    // config: 订阅配置对象（Mixin 合并后）
+    // profileName: 订阅名称（格式：profile_<id>）
+    
+    // 修改配置...
+    
+    return config; // 必须返回配置对象
+}
+```
 
 ### `Tun` 模式
 
