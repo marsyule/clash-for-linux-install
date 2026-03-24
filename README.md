@@ -14,14 +14,14 @@
 - 自动检测端口占用情况，在冲突时随机分配可用端口。
 - 自动识别系统架构与初始化系统，下载匹配的内核与依赖，并生成对应的服务管理配置。
 - 在需要时调用 [subconverter](https://github.com/tindy2013/subconverter) 进行本地订阅转换。
-- 新特性🔥：支持 JS 脚本控制订阅信息（已发布）
+- 新特性🔥：支持 JS 脚本控制订阅信息（新特性需要安装Node.js,不安装仅仅会造成此功能的失效，不会造成其他功能的损坏）
 
 ## 🚀 一键安装
 
 在终端中执行以下命令即可完成安装：
 
 ```bash
-git clone --branch master --depth 1 https://gh-proxy.org/https://github.com/nelvko/clash-for-linux-install.git \
+git clone --branch master --depth 1 https://gh-proxy.org/https://github.com/marsyule/clash-for-linux-install.git \
   && cd clash-for-linux-install \
   && bash install.sh
 ```
